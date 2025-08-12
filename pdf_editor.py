@@ -12,6 +12,7 @@ from PyQt5.QtWidgets import (
     QAction,
     QToolBar,
     QInputDialog,
+    QMessageBox,
 )
 from PyQt5.QtGui import QImage, QPixmap, QPen, QBrush
 from PyQt5.QtCore import Qt, QPointF, QRectF
@@ -165,6 +166,9 @@ class PDFEditor(QMainWindow):
         zoom_out_act = QAction("Zoom Out", self)
         zoom_out_act.triggered.connect(self.zoom_out)
 
+        about_act = QAction("About", self)
+        about_act.triggered.connect(self.show_about)
+
         toolbar = QToolBar()
         toolbar.addAction(open_act)
         toolbar.addAction(save_act)
@@ -178,6 +182,7 @@ class PDFEditor(QMainWindow):
         toolbar.addAction(undo_act)
         toolbar.addAction(zoom_in_act)
         toolbar.addAction(zoom_out_act)
+        toolbar.addAction(about_act)
         self.addToolBar(toolbar)
 
         self.tool_actions = [line_act, rect_act, ell_act, text_act, text_fill_act]
@@ -381,6 +386,17 @@ class PDFEditor(QMainWindow):
             logger.info("Saved PDF as %s", path)
         except Exception:
             logger.exception("Failed to save PDF %s", path)
+
+    def show_about(self):
+        message = (
+            "Author: Charl Coetzer\n\n"
+            "Usage:\n"
+            "- Open a PDF using 'Open'.\n"
+            "- Navigate with 'Prev' and 'Next'.\n"
+            "- Select a drawing tool to annotate.\n"
+            "- Save your changes with 'Save As'."
+        )
+        QMessageBox.information(self, "About PDFShitBox", message)
 
 
 def main():
