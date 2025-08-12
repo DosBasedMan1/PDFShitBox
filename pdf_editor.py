@@ -177,9 +177,12 @@ class PDFEditor(QMainWindow):
         try:
             page = self.doc[self.current_page]
             pix = page.get_pixmap()
-            img = QImage(
-                pix.samples, pix.width, pix.height, pix.stride, QImage.Format_RGBA8888
+            image_format = (
+                QImage.Format_RGBA8888 if pix.n >= 4 else QImage.Format_RGB888
             )
+            img = QImage(pix.samples, pix.width, pix.height, pix.stride, image_format)
+            if image_format == QImage.Format_RGB888:
+                img = img.rgbSwapped()
             pixmap = QPixmap.fromImage(img)
             self.scene.clear()
             self.scene.setSceneRect(0, 0, pix.width, pix.height)
