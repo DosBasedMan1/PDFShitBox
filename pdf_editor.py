@@ -1,5 +1,7 @@
 import sys
 from collections import defaultdict
+import logging
+
 import fitz  # PyMuPDF
 from PyQt5.QtWidgets import (
     QApplication,
@@ -12,6 +14,15 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtGui import QImage, QPixmap, QPen
 from PyQt5.QtCore import Qt, QPointF, QRectF
+
+
+logging.basicConfig(
+    filename="pdf_editor.log",
+    level=logging.DEBUG,
+    filemode="w",
+    format="%(asctime)s - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 
 class PDFGraphicsView(QGraphicsView):
@@ -98,6 +109,7 @@ class PDFEditor(QMainWindow):
         self.setCentralWidget(self.view)
 
         self._create_actions()
+        logger.debug("PDFEditor initialized")
 
     # ------------------------------------------------------------------
     # UI helpers
@@ -140,6 +152,7 @@ class PDFEditor(QMainWindow):
         self.current_tool = name
         for action in self.tool_actions:
             action.setChecked(action.text().lower() == name)
+        logger.debug("Tool set to %s", name)
 
     # ------------------------------------------------------------------
     # Core functionality
@@ -147,21 +160,34 @@ class PDFEditor(QMainWindow):
     def open_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "Open PDF", "", "PDF Files (*.pdf)")
         if not path:
+            logger.info("Open file cancelled")
             return
-        self.doc = fitz.open(path)
-        self.current_page = 0
-        self.load_page()
+        try:
+            self.doc = fitz.open(path)
+            self.current_page = 0
+            logger.info("Opened PDF '%s' with %d pages", path, self.doc.page_count)
+            self.load_page()
+        except Exception:
+            logger.exception("Failed to open PDF %s", path)
 
     def load_page(self):
         if self.doc is None:
+            logger.warning("load_page called with no document")
             return
-        page = self.doc[self.current_page]
-        pix = page.get_pixmap()
-        img = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format_RGBA8888)
-        pixmap = QPixmap.fromImage(img)
-        self.scene.clear()
-        self.scene.setSceneRect(0, 0, pix.width, pix.height)
-        self.scene.addPixmap(pixmap)
+        try:
+            page = self.doc[self.current_page]
+            pix = page.get_pixmap()
+            img = QImage(
+                pix.samples, pix.width, pix.height, pix.stride, QImage.Format_RGBA8888
+            )
+            pixmap = QPixmap.fromImage(img)
+            self.scene.clear()
+            self.scene.setSceneRect(0, 0, pix.width, pix.height)
+            self.scene.addPixmap(pixmap)
+            logger.debug("Loaded page %d", self.current_page + 1)
+        except Exception:
+            logger.exception("Failed to load page %d", self.current_page)
+            return
 
         # redraw existing shapes for page
         for typ, data in self.shapes[self.current_page]:
@@ -182,44 +208,65 @@ class PDFEditor(QMainWindow):
 
     def add_shape(self, typ, data):
         self.shapes[self.current_page].append((typ, data))
+        logger.debug(
+            "Added shape %s with data %s on page %d",
+            typ,
+            data,
+            self.current_page + 1,
+        )
 
     def next_page(self):
         if self.doc and self.current_page + 1 < self.doc.page_count:
             self.current_page += 1
+            logger.debug("Navigated to next page %d", self.current_page + 1)
             self.load_page()
+        else:
+            logger.info("Next page requested but at end or no document")
 
     def prev_page(self):
         if self.doc and self.current_page > 0:
             self.current_page -= 1
+            logger.debug("Navigated to previous page %d", self.current_page + 1)
             self.load_page()
+        else:
+            logger.info("Previous page requested but at beginning or no document")
 
     def save_file(self):
         if self.doc is None:
+            logger.warning("save_file called with no document")
             return
         path, _ = QFileDialog.getSaveFileName(self, "Save PDF", "", "PDF Files (*.pdf)")
         if not path:
+            logger.info("Save file cancelled")
             return
-        for page_number, shapes in self.shapes.items():
-            page = self.doc[page_number]
-            for typ, data in shapes:
-                if typ == "line":
-                    x1, y1, x2, y2 = data
-                    page.draw_line((x1, y1), (x2, y2), color=(1, 0, 0), width=2)
-                elif typ == "rect":
-                    x1, y1, x2, y2 = data
-                    page.draw_rect([x1, y1, x2, y2], color=(1, 0, 0), width=2)
-                elif typ == "ellipse":
-                    x1, y1, x2, y2 = data
-                    page.draw_oval([x1, y1, x2, y2], color=(1, 0, 0), width=2)
-        self.doc.save(path)
+        try:
+            for page_number, shapes in self.shapes.items():
+                page = self.doc[page_number]
+                for typ, data in shapes:
+                    if typ == "line":
+                        x1, y1, x2, y2 = data
+                        page.draw_line((x1, y1), (x2, y2), color=(1, 0, 0), width=2)
+                    elif typ == "rect":
+                        x1, y1, x2, y2 = data
+                        page.draw_rect([x1, y1, x2, y2], color=(1, 0, 0), width=2)
+                    elif typ == "ellipse":
+                        x1, y1, x2, y2 = data
+                        page.draw_oval([x1, y1, x2, y2], color=(1, 0, 0), width=2)
+            self.doc.save(path)
+            logger.info("Saved PDF as %s", path)
+        except Exception:
+            logger.exception("Failed to save PDF %s", path)
 
 
 def main():
+    logger.info("Application started")
     app = QApplication(sys.argv)
     editor = PDFEditor()
     editor.resize(800, 600)
     editor.show()
-    sys.exit(app.exec_())
+    exit_code = app.exec_()
+    logger.info("Application exited with code %s", exit_code)
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":

@@ -17,3 +17,9 @@ pip install -r requirements.txt
 python pdf_editor.py
 ```
 Use the toolbar to open a PDF, navigate pages, draw shapes, and save your changes.
+
+### Logging
+
+Running the application creates a `pdf_editor.log` file in the working directory.
+The log contains detailed information about actions taken and any errors
+encountered, which can help diagnose issues such as problems displaying a PDF.
