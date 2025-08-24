@@ -13,9 +13,12 @@ from PyQt5.QtWidgets import (
     QToolBar,
     QInputDialog,
     QMessageBox,
+    QComboBox,
 )
-from PyQt5.QtGui import QImage, QPixmap, QPen, QBrush
+from PyQt5.QtGui import QImage, QPixmap, QPen, QBrush, QColor, QPalette
 from PyQt5.QtCore import Qt, QPointF, QRectF
+
+from models import ActorFactory, Shape
 
 
 logging.basicConfig(
@@ -49,7 +52,8 @@ class PDFGraphicsView(QGraphicsView):
             end = self.mapToScene(event.pos())
             if self._temp_item:
                 self.scene().removeItem(self._temp_item)
-            pen = QPen(Qt.red, 2)
+            color = QColor(*self._parent.current_actor.color)
+            pen = QPen(color, 2)
             tool = self._parent.current_tool
             if tool == "line":
                 self._temp_item = self.scene().addLine(
@@ -69,7 +73,8 @@ class PDFGraphicsView(QGraphicsView):
     def mouseReleaseEvent(self, event):
         if self._drawing:
             end = self.mapToScene(event.pos())
-            pen = QPen(Qt.red, 2)
+            color = QColor(*self._parent.current_actor.color)
+            pen = QPen(color, 2)
             tool = self._parent.current_tool
             if self._temp_item:
                 self.scene().removeItem(self._temp_item)
@@ -111,7 +116,10 @@ class PDFEditor(QMainWindow):
         self.current_page = 0
         self.current_tool = None
         self.zoom = 1.0
-        self.shapes = defaultdict(list)  # page number -> list of shapes
+        self.shapes = defaultdict(list)  # page number -> list of Shape
+        self.actors = []
+        self.current_actor = ActorFactory.create("Default", "Business")
+        self.actors.append(self.current_actor)
 
         self.scene = QGraphicsScene()
         self.view = PDFGraphicsView(self.scene, self)
@@ -169,6 +177,14 @@ class PDFEditor(QMainWindow):
         about_act = QAction("About", self)
         about_act.triggered.connect(self.show_about)
 
+        add_actor_act = QAction("Add Actor", self)
+        add_actor_act.triggered.connect(self.add_actor)
+
+        self.actor_combo = QComboBox()
+        for actor in self.actors:
+            self.actor_combo.addItem(actor.name)
+        self.actor_combo.currentIndexChanged.connect(self.select_actor)
+
         toolbar = QToolBar()
         toolbar.addAction(open_act)
         toolbar.addAction(save_act)
@@ -183,6 +199,8 @@ class PDFEditor(QMainWindow):
         toolbar.addAction(zoom_in_act)
         toolbar.addAction(zoom_out_act)
         toolbar.addAction(about_act)
+        toolbar.addWidget(self.actor_combo)
+        toolbar.addAction(add_actor_act)
         self.addToolBar(toolbar)
 
         self.tool_actions = [line_act, rect_act, ell_act, text_act, text_fill_act]
@@ -192,6 +210,35 @@ class PDFEditor(QMainWindow):
         for action in self.tool_actions:
             action.setChecked(action.data() == name)
         logger.debug("Tool set to %s", name)
+
+    def select_actor(self, index):
+        if 0 <= index < len(self.actors):
+            self.current_actor = self.actors[index]
+            logger.debug(
+                "Actor set to %s (%s)",
+                self.current_actor.name,
+                self.current_actor.actor_type,
+            )
+
+    def add_actor(self):
+        name, ok = QInputDialog.getText(self, "Actor Name", "Enter actor name:")
+        if not ok or not name:
+            return
+        actor_type, ok = QInputDialog.getItem(
+            self,
+            "Actor Type",
+            "Select actor type:",
+            list(ActorFactory.TYPE_COLORS.keys()),
+            0,
+            False,
+        )
+        if not ok:
+            return
+        actor = ActorFactory.create(name, actor_type)
+        self.actors.append(actor)
+        self.actor_combo.addItem(actor.name)
+        self.actor_combo.setCurrentIndex(self.actor_combo.count() - 1)
+        logger.debug("Added actor %s of type %s", name, actor_type)
 
     # ------------------------------------------------------------------
     # Core functionality
@@ -233,8 +280,10 @@ class PDFEditor(QMainWindow):
             return
 
         # redraw existing shapes for page
-        for typ, data in self.shapes[self.current_page]:
-            pen = QPen(Qt.red, 2)
+        for shape in self.shapes[self.current_page]:
+            pen = QPen(QColor(*shape.actor.color), 2)
+            typ = shape.typ
+            data = shape.data
             if typ == "line":
                 x1, y1, x2, y2 = data
                 self.scene.addLine(x1, y1, x2, y2, pen)
@@ -268,11 +317,13 @@ class PDFEditor(QMainWindow):
         self.setWindowTitle(f"PDF Editor - Page {self.current_page + 1}/{self.doc.page_count}")
 
     def add_shape(self, typ, data):
-        self.shapes[self.current_page].append((typ, data))
+        shape = Shape(typ, data, self.current_actor)
+        self.shapes[self.current_page].append(shape)
         logger.debug(
-            "Added shape %s with data %s on page %d",
+            "Added shape %s with data %s for actor %s on page %d",
             typ,
             data,
+            self.current_actor.name,
             self.current_page + 1,
         )
 
@@ -281,7 +332,8 @@ class PDFEditor(QMainWindow):
         if not ok:
             logger.info("Text box cancelled")
             return
-        pen = QPen(Qt.red, 2)
+        color = QColor(*self.current_actor.color)
+        pen = QPen(color, 2)
         brush = QBrush(Qt.yellow) if fill else QBrush(Qt.transparent)
         self.scene.addRect(rect, pen, brush)
         text_item = self.scene.addText(text)
@@ -293,9 +345,10 @@ class PDFEditor(QMainWindow):
             (rect.left(), rect.top(), rect.right(), rect.bottom(), text),
         )
         logger.debug(
-            "Added text box with fill=%s and text '%s' on page %d",
+            "Added text box with fill=%s and text '%s' for actor %s on page %d",
             fill,
             text,
+            self.current_actor.name,
             self.current_page + 1,
         )
 
@@ -304,7 +357,10 @@ class PDFEditor(QMainWindow):
         if shapes:
             removed = shapes.pop()
             logger.debug(
-                "Undo shape %s on page %d", removed[0], self.current_page + 1
+                "Undo shape %s for actor %s on page %d",
+                removed.typ,
+                removed.actor.name,
+                self.current_page + 1,
             )
             self.load_page()
         else:
@@ -349,19 +405,22 @@ class PDFEditor(QMainWindow):
         try:
             for page_number, shapes in self.shapes.items():
                 page = self.doc[page_number]
-                for typ, data in shapes:
+                for shape in shapes:
+                    typ = shape.typ
+                    data = shape.data
+                    color = tuple(c / 255 for c in shape.actor.color)
                     if typ == "line":
                         x1, y1, x2, y2 = data
-                        page.draw_line((x1, y1), (x2, y2), color=(1, 0, 0), width=2)
+                        page.draw_line((x1, y1), (x2, y2), color=color, width=2)
                     elif typ == "rect":
                         x1, y1, x2, y2 = data
-                        page.draw_rect([x1, y1, x2, y2], color=(1, 0, 0), width=2)
+                        page.draw_rect([x1, y1, x2, y2], color=color, width=2)
                     elif typ == "ellipse":
                         x1, y1, x2, y2 = data
-                        page.draw_oval([x1, y1, x2, y2], color=(1, 0, 0), width=2)
+                        page.draw_oval([x1, y1, x2, y2], color=color, width=2)
                     elif typ == "text":
                         x1, y1, x2, y2, text = data
-                        page.draw_rect([x1, y1, x2, y2], color=(1, 0, 0), width=2)
+                        page.draw_rect([x1, y1, x2, y2], color=color, width=2)
                         page.insert_textbox(
                             fitz.Rect(x1, y1, x2, y2),
                             text,
@@ -372,7 +431,7 @@ class PDFEditor(QMainWindow):
                         x1, y1, x2, y2, text = data
                         page.draw_rect(
                             [x1, y1, x2, y2],
-                            color=(1, 0, 0),
+                            color=color,
                             width=2,
                             fill=(1, 1, 0),
                         )
@@ -402,6 +461,22 @@ class PDFEditor(QMainWindow):
 def main():
     logger.info("Application started")
     app = QApplication(sys.argv)
+    app.setStyle("Fusion")
+    palette = QPalette()
+    palette.setColor(QPalette.Window, QColor(53, 53, 53))
+    palette.setColor(QPalette.WindowText, Qt.white)
+    palette.setColor(QPalette.Base, QColor(25, 25, 25))
+    palette.setColor(QPalette.AlternateBase, QColor(53, 53, 53))
+    palette.setColor(QPalette.ToolTipBase, Qt.white)
+    palette.setColor(QPalette.ToolTipText, Qt.white)
+    palette.setColor(QPalette.Text, Qt.white)
+    palette.setColor(QPalette.Button, QColor(53, 53, 53))
+    palette.setColor(QPalette.ButtonText, Qt.white)
+    palette.setColor(QPalette.BrightText, Qt.red)
+    palette.setColor(QPalette.Link, QColor(42, 130, 218))
+    palette.setColor(QPalette.Highlight, QColor(42, 130, 218))
+    palette.setColor(QPalette.HighlightedText, Qt.black)
+    app.setPalette(palette)
     editor = PDFEditor()
     editor.resize(800, 600)
     editor.show()
